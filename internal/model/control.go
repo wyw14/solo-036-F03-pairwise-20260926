@@ -99,26 +99,28 @@ type PermitState struct {
 }
 
 type OperationRecord struct {
-	Run       Run             `json:"run"`
-	Route     RouteState      `json:"route"`
-	Pressure  PressureState   `json:"pressure"`
-	Tracking  []TrackingState `json:"tracking"`
-	Permits   []PermitState   `json:"permits"`
-	LastError string          `json:"last_error,omitempty"`
+	Run       Run              `json:"run"`
+	Route     RouteState       `json:"route"`
+	Pressure  PressureState    `json:"pressure"`
+	Tracking  []TrackingState  `json:"tracking"`
+	Permits   []PermitState    `json:"permits"`
+	Forecast  *ArrivalForecast `json:"forecast,omitempty"`
+	LastError string           `json:"last_error,omitempty"`
 }
 
 type ControlSnapshot struct {
-	Revision   string          `json:"revision"`
-	CapturedAt time.Time       `json:"captured_at"`
-	Stations   []Station       `json:"stations"`
-	Valves     []ValveState    `json:"valves"`
-	Closures   []ClosureState  `json:"closures"`
-	Pressures  []PressureState `json:"pressures"`
-	Routes     []RouteState    `json:"routes"`
-	Tracking   []TrackingState `json:"tracking"`
-	Permits    []PermitState   `json:"permits"`
-	Runs       []Run           `json:"runs"`
-	Incidents  []Incident      `json:"incidents"`
+	Revision   string            `json:"revision"`
+	CapturedAt time.Time         `json:"captured_at"`
+	Stations   []Station         `json:"stations"`
+	Valves     []ValveState      `json:"valves"`
+	Closures   []ClosureState    `json:"closures"`
+	Pressures  []PressureState   `json:"pressures"`
+	Routes     []RouteState      `json:"routes"`
+	Tracking   []TrackingState   `json:"tracking"`
+	Permits    []PermitState     `json:"permits"`
+	Arrivals   []ArrivalForecast `json:"arrivals"`
+	Runs       []Run             `json:"runs"`
+	Incidents  []Incident        `json:"incidents"`
 }
 
 func (s Station) Validate() error {
@@ -315,6 +317,13 @@ func (s ControlSnapshot) Operation(runID string) (OperationRecord, bool) {
 	for _, permit := range s.Permits {
 		if permit.RunID == runID {
 			result.Permits = append(result.Permits, permit)
+		}
+	}
+	for i := range s.Arrivals {
+		if s.Arrivals[i].RunID == runID {
+			forecast := s.Arrivals[i]
+			result.Forecast = &forecast
+			break
 		}
 	}
 	return result, true

@@ -28,6 +28,7 @@ type ControlState struct {
 	Pressures  map[string]model.PressureState
 	Tracking   map[string][]model.TrackingState
 	Permits    map[string][]model.PermitState
+	Arrivals   map[string]model.ArrivalForecast
 	Incidents  []model.Incident
 	Revision   string
 	Persistent *journal.FileStore
@@ -72,6 +73,7 @@ func defaultControlState() *ControlState {
 		Pressures: make(map[string]model.PressureState),
 		Tracking:  make(map[string][]model.TrackingState),
 		Permits:   make(map[string][]model.PermitState),
+		Arrivals:  make(map[string]model.ArrivalForecast),
 		Incidents: make([]model.Incident, 0),
 		Revision:  model.NewRevision(),
 	}
@@ -345,6 +347,7 @@ func (r *Runtime) Track(runID string, request TrackingRequest) (model.OperationR
 	}); err != nil {
 		return model.OperationRecord{}, err
 	}
+	r.refreshArrival(runID)
 	return r.Operation(runID)
 }
 
@@ -458,6 +461,10 @@ func (r *Runtime) Complete(runID, routeID string) (model.OperationRecord, error)
 	}); err != nil {
 		return model.OperationRecord{}, err
 	}
+	r.mu.Lock()
+	delete(r.control.Arrivals, runID)
+	r.control.Revision = model.NewRevision()
+	r.mu.Unlock()
 	return r.Operation(runID)
 }
 
@@ -479,11 +486,15 @@ func (r *Runtime) Cancel(runID string) error {
 	}
 	r.control.Revision = model.NewRevision()
 	r.mu.Unlock()
-	return r.appendEvent(model.Event{
+	if err := r.appendEvent(model.Event{
 		RunID:   runID,
 		Kind:    "cancelled",
 		Payload: "operator cancellation",
-	})
+	}); err != nil {
+		return err
+	}
+	r.refreshArrival(runID)
+	return nil
 }
 
 func (r *Runtime) Operation(runID string) (model.OperationRecord, error) {
@@ -509,6 +520,7 @@ func (r *Runtime) Snapshot() model.ControlSnapshot {
 		Routes:     make([]model.RouteState, 0, len(control.Routes)),
 		Tracking:   make([]model.TrackingState, 0),
 		Permits:    make([]model.PermitState, 0),
+		Arrivals:   make([]model.ArrivalForecast, 0),
 		Runs:       r.Runs.Snapshot(),
 		Incidents:  append([]model.Incident(nil), control.Incidents...),
 	}
@@ -534,9 +546,13 @@ func (r *Runtime) Snapshot() model.ControlSnapshot {
 	for _, values := range control.Permits {
 		snapshot.Permits = append(snapshot.Permits, values...)
 	}
+	for _, forecast := range control.Arrivals {
+		snapshot.Arrivals = append(snapshot.Arrivals, forecast)
+	}
 	sort.Slice(snapshot.Valves, func(i, j int) bool { return snapshot.Valves[i].ID < snapshot.Valves[j].ID })
 	sort.Slice(snapshot.Routes, func(i, j int) bool { return snapshot.Routes[i].ID < snapshot.Routes[j].ID })
 	sort.Slice(snapshot.Tracking, func(i, j int) bool { return snapshot.Tracking[i].ObservedAt.Before(snapshot.Tracking[j].ObservedAt) })
+	sort.Slice(snapshot.Arrivals, func(i, j int) bool { return snapshot.Arrivals[i].RunID < snapshot.Arrivals[j].RunID })
 	return snapshot
 }
 
@@ -623,6 +639,35 @@ func (r *Runtime) RecoverPersistent() (RecoveryReport, error) {
 	if err != nil {
 		return RecoveryReport{}, err
 	}
+	// Rebuild tracker evidence from the recovered readings so arrival
+	// forecasts survive a restart, grouped by the latest generation per run.
+	latestGeneration := make(map[string]int64)
+	byGeneration := make(map[string]map[int64][]model.PassageEvidence)
+	for _, value := range snapshot.Control.Tracking {
+		if value.Generation > latestGeneration[value.RunID] {
+			latestGeneration[value.RunID] = value.Generation
+		}
+		if byGeneration[value.RunID] == nil {
+			byGeneration[value.RunID] = make(map[int64][]model.PassageEvidence)
+		}
+		byGeneration[value.RunID][value.Generation] = append(
+			byGeneration[value.RunID][value.Generation],
+			model.PassageEvidence{
+				RunID:      value.RunID,
+				Station:    value.StationID,
+				SourceID:   value.SourceID,
+				Generation: value.Generation,
+				Position:   value.Position,
+				At:         value.ObservedAt,
+				Valid:      value.Online,
+			},
+		)
+	}
+	for runID, generation := range latestGeneration {
+		r.Tracker.SeedGeneration(runID, generation)
+		r.Tracker.Restore(runID, generation, byGeneration[runID][generation])
+	}
+	r.refreshAllArrivals()
 	return RecoveryReport{
 		RecoveredRuns:    len(snapshot.Control.Runs),
 		RecoveredRoutes:  len(leasing),
@@ -733,6 +778,7 @@ func (r *Runtime) ReviseTracking(runID string) (int64, error) {
 	r.mu.Lock()
 	r.control.Revision = model.NewRevision()
 	r.mu.Unlock()
+	r.refreshArrival(runID)
 	return generation, nil
 }
 
