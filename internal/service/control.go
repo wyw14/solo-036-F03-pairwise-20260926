@@ -492,6 +492,9 @@ func (r *Runtime) Operation(runID string) (model.OperationRecord, error) {
 	if !ok {
 		return model.OperationRecord{}, fmt.Errorf("run %s not found", runID)
 	}
+	if forecast, ok := r.trackingForecast(runID, snapshot); ok {
+		operation.Forecast = &forecast
+	}
 	return operation, nil
 }
 
@@ -727,6 +730,7 @@ func (r *Runtime) ReviseTracking(runID string) (int64, error) {
 		return 0, fmt.Errorf("run %s not found", runID)
 	}
 	generation := r.Tracker.Revise(runID)
+	r.Routes.Reset(runID)
 	if err := r.appendEvent(model.Event{RunID: runID, Kind: "tracking_revision", Epoch: generation}); err != nil {
 		return 0, err
 	}

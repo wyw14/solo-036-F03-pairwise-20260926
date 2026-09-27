@@ -99,12 +99,13 @@ type PermitState struct {
 }
 
 type OperationRecord struct {
-	Run       Run             `json:"run"`
-	Route     RouteState      `json:"route"`
-	Pressure  PressureState   `json:"pressure"`
-	Tracking  []TrackingState `json:"tracking"`
-	Permits   []PermitState   `json:"permits"`
-	LastError string          `json:"last_error,omitempty"`
+	Run       Run               `json:"run"`
+	Route     RouteState        `json:"route"`
+	Pressure  PressureState     `json:"pressure"`
+	Tracking  []TrackingState   `json:"tracking"`
+	Permits   []PermitState     `json:"permits"`
+	Forecast  *TrackingForecast `json:"forecast,omitempty"`
+	LastError string            `json:"last_error,omitempty"`
 }
 
 type ControlSnapshot struct {
